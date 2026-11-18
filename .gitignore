@@ -1,0 +1,5 @@
+dist/
+*.syso
+versioninfo.json
+.DS_Store
+CLAUDE.local.md

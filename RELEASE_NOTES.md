@@ -8,3 +8,5 @@ No administrator rights needed. The installer is not code-signed, so SmartScreen
 The app is not notarized by Apple, so the first time macOS blocks it: open **System Settings → Privacy & Security** and click **Open Anyway** (details in the README).
 
 `SHA256SUMS.txt` lists the checksums of every file.
+
+How these were built: the Windows files are built and tested by GitHub Actions on a real Windows machine. The Mac disk image was built and tested on a Mac and attached by hand, because GitHub's hosted Mac machines were unavailable (see the README).

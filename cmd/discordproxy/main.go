@@ -103,7 +103,8 @@ func writeState(port int) error {
 	return os.Rename(tmp, statePath())
 }
 
-// openLog keeps a small local log (errors and lifecycle). Host names are only logged with DISCORDPROXY_DEBUG=1.
+// openLog keeps a small local log (errors and lifecycle). Hosts of successful connections are only logged with
+// DISCORDPROXY_DEBUG=1; a failed connection is logged with its host name.
 func openLog() (func(string, ...any), io.Closer) {
 	_ = os.MkdirAll(stateDir(), 0o700)
 	if st, err := os.Stat(logPath()); err == nil && st.Size() > 512*1024 {

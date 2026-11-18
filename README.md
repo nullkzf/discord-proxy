@@ -4,6 +4,10 @@ Opens **Discord** when your internet provider blocks it (for example by poisonin
 when it sees the site name). It is **not a VPN**: nothing is routed through another country, your IP address is the same,
 and **only Discord** is pointed at it. No other app, browser or system setting is touched.
 
+**Not sure what it does, or want to check it first?** Paste [`PASTE-TO-CLAUDE.md`](PASTE-TO-CLAUDE.md) into Claude (or any AI
+assistant). It explains what this is, how it works, what it touches and what it can't do, in plain language, and tells the
+assistant where to check each claim in the source.
+
 > Unofficial. Not affiliated with, endorsed by or sponsored by Discord Inc. "Discord" is their trademark.
 > The icon is an original drawing, not Discord's logo. Check what is allowed where you live and use it at your own risk.
 
@@ -45,7 +49,11 @@ When you open Discord Proxy it
    first message can't match it. It never decrypts anything and installs no certificate; and
 4. opens Discord with `--proxy-server` and proxy environment variables, so only Discord uses it.
 
-The proxy stops by itself a short while after Discord closes. A small log (errors only, no sites you visit) is in
+Nothing else is touched: no system proxy setting, no saved environment variable, no startup item, service or scheduled task,
+no certificate. The tests check this on a real Windows machine and on a Mac by comparing those places before and after, and by
+showing that another program's traffic does not go through the proxy (`scripts/ci-smoke.ps1`, `scripts/smoke-mac.sh`).
+
+The proxy stops by itself a short while after Discord closes. A small log (errors and start/stop events; a failed connection is logged with its host name, so look it over before posting it publicly) is in
 `%LOCALAPPDATA%\DiscordProxy\proxy.log` (Windows) or `~/Library/Application Support/DiscordProxy/proxy.log` (Mac).
 
 ## Limits and honest warnings
@@ -81,7 +89,7 @@ bash scripts/smoke-mac.sh              # Mac smoke test against a stand-in for D
 ```
 `DP_EMBED_RESOURCES=1` additionally embeds the Windows icon, version info and manifest (uses
 [goversioninfo](https://github.com/josephspurrier/goversioninfo)); the Windows installer is `installer/DiscordProxy.iss`
-(Inno Setup 6). CI (`.github/workflows/ci.yml`) builds and tests both platforms and publishes tagged releases.
+(Inno Setup 6). CI (`.github/workflows/ci.yml`) builds and tests Windows on every push and publishes tagged releases; the Mac job is run by hand (GitHub's hosted Mac machines were unavailable), so the Mac app is built and tested locally.
 
 Layout: `internal/proxy` (the proxy: DoH lookup, handshake splitting, tunnelling), `cmd/discordproxy` (launcher + background
 service for both OSes), `tools/stubdiscord` (stand-in for Discord in tests), `installer/`, `scripts/`, `assets/`.

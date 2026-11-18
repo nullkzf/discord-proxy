@@ -1,6 +1,7 @@
 # Runs on a real Windows machine (GitHub Actions). A stand-in for Discord (dist\stubdiscord.exe) is installed in a
 # fake %LOCALAPPDATA%; the real DiscordProxy.exe is then run against it. Nothing here touches a real Discord.
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'ci-common.ps1')
 $dist = Join-Path $PWD 'dist'
 $tmp = Join-Path $env:RUNNER_TEMP 'dp-smoke'
 Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
@@ -35,6 +36,8 @@ function WaitFor($what, [scriptblock]$cond, $seconds = 20) {
 function Records($dir, $kind) { Get-ChildItem $dir -Filter "$kind-*.json" -ErrorAction SilentlyContinue }
 function Json($f) { Get-Content $f.FullName -Raw | ConvertFrom-Json }
 function EnvVal($rec, $name) { ($rec.env | Where-Object { $_.k -ceq $name } | Select-Object -First 1).v }
+
+$systemBefore = Get-SystemSnapshot
 
 # ---- 1. launcher starts the proxy and "Discord" with the proxy flag + environment -----------------------
 $env:STUB_RECORD = Join-Path $tmp 'rec1'
@@ -93,6 +96,15 @@ $port3 = (Get-Content "$state\proxy.json" -Raw | ConvertFrom-Json).port
 $d3 = Json (Records $env:STUB_RECORD 'discord' | Select-Object -First 1)
 if (($d3.args -join ' ') -ne "--proxy-server=http://127.0.0.1:$port3") { Fail "reopened Discord args: $($d3.args -join ' ')" }
 Write-Host 'OK 6: an already-open Discord is restarted through the proxy'
+
+# ---- 7. only Discord is involved: nothing else on the PC is pointed at the proxy or changed ------------------------
+# (the proxy is running right now, from step 6)
+$systemAfter = Get-SystemSnapshot
+if ($systemAfter -ne $systemBefore) { Fail "system settings changed while Discord Proxy ran:`n--- before ---`n$systemBefore`n--- after ---`n$systemAfter" }
+$null = & curl.exe -s -o NUL --max-time 40 https://example.org/   # a bystander program that is not Discord
+if ((Get-Content "$state\proxy.log" -Raw) -match 'example\.org') { Fail 'a program that is not Discord went through the proxy' }
+if ((Get-Content "$state\proxy.log" -Raw) -notmatch 'example\.com') { Fail 'control failed: the proxied request is missing from the log' }
+Write-Host 'OK 7: system proxy settings, environment and auto-start entries are unchanged; a bystander program does not use the proxy'
 
 Get-Process DiscordProxy, Discord, stubdiscord -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Write-Host 'ALL SMOKE TESTS PASSED'

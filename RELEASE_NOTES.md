@@ -7,6 +7,8 @@ No administrator rights needed. The installer is not code-signed, so SmartScreen
 **Mac (macOS 12 or newer, Apple Silicon and Intel):** download **`DiscordProxy-…-mac.dmg`**, drag **Discord Proxy** into Applications, open it from there instead of the normal Discord.
 The app is not notarized by Apple, so the first time macOS blocks it: open **System Settings → Privacy & Security** and click **Open Anyway** (details in the README).
 
+**`PASTE-TO-CLAUDE.md`** is a short note you can paste into Claude (or any AI assistant): it explains what Discord Proxy is, how it works, what it touches and its limits, and where to check each claim in the source.
+
 `SHA256SUMS.txt` lists the checksums of every file.
 
 How these were built: the Windows files are built and tested by GitHub Actions on a real Windows machine. The Mac disk image was built and tested on a Mac and attached by hand, because GitHub's hosted Mac machines were unavailable (see the README).

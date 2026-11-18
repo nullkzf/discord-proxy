@@ -1,11 +1,13 @@
 # Runs on a real Windows machine (GitHub Actions): silent install, check the result, silent uninstall.
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
+. (Join-Path $PSScriptRoot 'ci-common.ps1')
 $setup = Get-ChildItem dist -Filter 'DiscordProxy-Setup-*.exe' | Select-Object -First 1
 if (-not $setup) { throw 'installer not found in dist\' }
 $dir = Join-Path $env:RUNNER_TEMP 'dp-install'
 Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
 
+$systemBefore = Get-SystemSnapshot
 $p = Start-Process $setup.FullName -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=$dir", '/TASKS=desktopicon' -PassThru
 $null = $p.Handle
 $p.WaitForExit()
@@ -39,6 +41,7 @@ if (-not ($g -gt $r + 15 -and $g -gt $b + 15)) { throw 'the embedded icon is not
 
 $ver = Start-Process $exe -ArgumentList '--version' -PassThru -Wait -RedirectStandardOutput (Join-Path $env:RUNNER_TEMP 'ver.txt')
 Write-Host "version output: $((Get-Content (Join-Path $env:RUNNER_TEMP 'ver.txt') -ErrorAction SilentlyContinue) -join ' ')"
+if ((Get-SystemSnapshot) -ne $systemBefore) { throw 'installing changed a system proxy setting, the environment or an auto-start entry' }
 Write-Host 'OK: installed, shortcuts, version info and the green icon are all in place'
 
 $u = Start-Process (Join-Path $dir 'unins000.exe') -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -PassThru
@@ -47,4 +50,5 @@ $u.WaitForExit()
 Start-Sleep -Seconds 2
 if (Test-Path $exe) { throw 'uninstall left DiscordProxy.exe behind' }
 foreach ($lnk in $startMenu, $desktop) { if (Test-Path $lnk) { throw "uninstall left $lnk behind" } }
+if ((Get-SystemSnapshot) -ne $systemBefore) { throw 'uninstalling left a system setting changed' }
 Write-Host 'OK: uninstalled cleanly'

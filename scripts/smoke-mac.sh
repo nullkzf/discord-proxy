@@ -23,6 +23,16 @@ have_record() { compgen -G "$1/discord-*.json" >/dev/null; }
 port_of() { py 'import json,sys;print(json.load(open(sys.argv[1]))["port"])' "$STATE/proxy.json"; }
 state_gone() { [[ ! -f "$STATE/proxy.json" ]]; }
 
+# Every place a proxy or an auto-start entry could be installed behind the user's back, as one comparable text.
+snapshot() {
+  echo "system proxy:"; scutil --proxy
+  echo "user LaunchAgents:"; ls -1 "$HOME/Library/LaunchAgents" 2>/dev/null || true
+  echo "system LaunchAgents/Daemons mentioning discordproxy:"; ls -1 /Library/LaunchAgents /Library/LaunchDaemons 2>/dev/null | grep -i discordproxy || true
+  echo "launchd jobs mentioning discordproxy:"; launchctl list 2>/dev/null | grep -i discordproxy | grep -vi teststub || true   # teststub = the stand-in Discord itself
+  echo "crontab:"; crontab -l 2>&1 || true
+}
+SYSTEM_BEFORE="$(snapshot)"
+
 # a throw-away Discord.app that runs the stand-in
 go build -o "$TMP/StubDiscord" ./tools/stubdiscord
 mkdir -p "$FAKE/Discord.app/Contents/MacOS"
@@ -92,7 +102,7 @@ OLD=$!
 disown "$OLD" 2>/dev/null || true   # no 'Terminated' noise when the test closes it
 sleep 1
 export STUB_RECORD="$TMP/rec3"
-"$BIN" || fail "third launcher exit code $?"
+STUB_LIFETIME=180 "$BIN" || fail "third launcher exit code $?"
 gone() { ! kill -0 "$OLD" 2>/dev/null; }
 wait_for "the unproxied Discord to be closed" 20 gone
 wait_for "Discord to be reopened through the proxy" 20 have_record "$STUB_RECORD"
@@ -100,6 +110,31 @@ P3="$(port_of)"
 ARGS3="$(py 'import json,sys;print(" ".join(json.load(open(sys.argv[1]))["args"]))' "$(ls "$STUB_RECORD"/discord-*.json | head -1)")"
 [[ "$ARGS3" == "--proxy-server=http://127.0.0.1:$P3" ]] || fail "reopened Discord args: $ARGS3"
 echo "OK 6: an already-open Discord is restarted through the proxy"
+
+# ---- 7. only Discord is involved: nothing else on the Mac is pointed at the proxy or changed -----------------------
+# (the proxy is running right now, from step 6)
+[[ "$(snapshot)" == "$SYSTEM_BEFORE" ]] || { diff <(echo "$SYSTEM_BEFORE") <(snapshot) || true; fail "system settings changed while Discord Proxy ran"; }
+grep -q 'example.com' "$STATE/proxy.log" || fail "control failed: the proxied request is missing from the log"
+curl -s -o /dev/null --max-time 40 https://example.org/ || true   # a bystander program that is not Discord
+grep -q 'example.org' "$STATE/proxy.log" && fail "a program that is not Discord went through the proxy"
+echo "OK 7: system proxy, LaunchAgents and cron are unchanged; a bystander program does not use the proxy"
+
+# ---- 8. the proxy writes only inside its own folder ------------------------------------------------------------------
+HOMEDIR="$TMP/home"; mkdir -p "$HOMEDIR"
+OWN="$HOMEDIR/Library/Application Support/DiscordProxy"
+env -u DISCORDPROXY_STATE_DIR HOME="$HOMEDIR" DISCORDPROXY_STAY=1 "$BIN" --serve &
+SERVE=$!
+disown "$SERVE" 2>/dev/null || true
+wait_for "a proxy started with an empty home folder" 10 test -f "$OWN/proxy.json"
+P8="$(py 'import json,sys;print(json.load(open(sys.argv[1]))["port"])' "$OWN/proxy.json")"
+[[ "$(curl -s -o /dev/null -w '%{http_code}' -x "http://127.0.0.1:$P8" --max-time 40 https://example.com/ || true)" == "200" ]] || fail "the second proxy did not tunnel HTTPS"
+kill -TERM "$SERVE"
+gone8() { ! kill -0 "$SERVE" 2>/dev/null; }
+wait_for "the second proxy to stop" 10 gone8
+OUTSIDE="$(find "$HOMEDIR" -type f ! -path "$OWN/*" || true)"
+[[ -z "$OUTSIDE" ]] || fail "the proxy wrote files outside its own folder: $OUTSIDE"
+[[ ! -f "$OWN/proxy.json" ]] || fail "the proxy left its state file behind after stopping"
+echo "OK 8: the proxy wrote only inside Library/Application Support/DiscordProxy and cleaned up its state file"
 
 cleanup
 echo "ALL MAC SMOKE TESTS PASSED"

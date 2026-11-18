@@ -11,13 +11,9 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
+  test-windows:
+    name: test (windows-latest)
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -25,13 +21,27 @@ jobs:
           go-version-file: go.mod
       - run: go vet ./...
       - run: go test ./... -count=1
-      - if: runner.os != 'Windows'
-        run: go test ./... -count=1 -race
+
+  # Portability check only (the proxy core is plain Go); does not block the Windows build.
+  test-portable:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./... -count=1 -race
 
   windows:
     name: Windows build, smoke test and installer
     runs-on: windows-latest
-    needs: test
+    needs: test-windows
     env:
       DP_EMBED_RESOURCES: '1'
     steps:

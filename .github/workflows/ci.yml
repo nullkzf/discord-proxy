@@ -29,7 +29,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-15-intel]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -89,7 +89,7 @@ jobs:
 
   mac:
     name: Mac build and smoke test
-    runs-on: macos-latest
+    runs-on: macos-15-intel   # Apple Silicon Mac runners are often capacity-starved; the app is universal either way
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -114,9 +114,9 @@ jobs:
           path: dist/DiscordProxy-*-mac.dmg
 
   release:
-    name: Publish the release
+    name: Publish the release (Windows downloads)
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [windows, mac]
+    needs: windows
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -126,10 +126,6 @@ jobs:
         with:
           name: windows-dist
           path: dist
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: mac-dist
-          path: dist
       - name: Create the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -138,3 +134,26 @@ jobs:
           gh release create "$GITHUB_REF_NAME" dist/* \
             --title "Discord Proxy ${GITHUB_REF_NAME#v}" \
             --notes-file RELEASE_NOTES.md --verify-tag
+
+  mac-release:
+    name: Add the Mac download to the release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [release, mac]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: mac-dist
+          path: dist
+      - name: Upload the dmg and refresh the checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" dist/DiscordProxy-*-mac.dmg --clobber
+          mkdir sums && cd sums
+          gh release download "$GITHUB_REF_NAME" --pattern 'DiscordProxy-*' --clobber
+          sha256sum DiscordProxy-* > SHA256SUMS.txt
+          gh release upload "$GITHUB_REF_NAME" SHA256SUMS.txt --clobber

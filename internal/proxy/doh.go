@@ -32,8 +32,15 @@ type Resolver struct {
 	// AllowBogons keeps private/loopback answers. Tests only.
 	AllowBogons bool
 
-	mu    sync.Mutex
-	cache map[string]cacheEntry
+	mu       sync.Mutex
+	cache    map[string]cacheEntry
+	inflight map[string]*lookupCall
+}
+
+// lookupCall lets concurrent lookups of the same name share one network query.
+type lookupCall struct {
+	done chan struct{}
+	ips  []string
 }
 
 // NewResolver returns a resolver that never uses a proxy for its own lookups.
@@ -47,7 +54,8 @@ func NewResolver(endpoints []string) *Resolver {
 			Timeout:   5 * time.Second,
 			Transport: &http.Transport{Proxy: nil, MaxIdleConnsPerHost: 4, IdleConnTimeout: 60 * time.Second},
 		},
-		cache: map[string]cacheEntry{},
+		cache:    map[string]cacheEntry{},
+		inflight: map[string]*lookupCall{},
 	}
 }
 
@@ -63,6 +71,17 @@ func (r *Resolver) Lookup(ctx context.Context, host string) []string {
 		r.mu.Unlock()
 		return e.ips
 	}
+	if c, ok := r.inflight[host]; ok { // someone is already asking: share their answer
+		r.mu.Unlock()
+		select {
+		case <-c.done:
+			return c.ips
+		case <-ctx.Done():
+			return nil
+		}
+	}
+	call := &lookupCall{done: make(chan struct{})}
+	r.inflight[host] = call
 	r.mu.Unlock()
 
 	var ips []string
@@ -74,13 +93,18 @@ func (r *Resolver) Lookup(ctx context.Context, host string) []string {
 			break
 		}
 	}
-	ttl := 5 * time.Minute
-	if len(ips) == 0 {
-		ttl = 30 * time.Second
-	}
 	r.mu.Lock()
-	r.cache[host] = cacheEntry{ips: ips, expires: time.Now().Add(ttl)}
+	if ctx.Err() == nil { // a cancelled lookup says nothing about whether the name exists
+		ttl := 5 * time.Minute
+		if len(ips) == 0 {
+			ttl = 30 * time.Second
+		}
+		r.cache[host] = cacheEntry{ips: ips, expires: time.Now().Add(ttl)}
+	}
+	delete(r.inflight, host)
+	call.ips = ips
 	r.mu.Unlock()
+	close(call.done)
 	return ips
 }
 

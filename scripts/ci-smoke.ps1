@@ -34,6 +34,7 @@ function WaitFor($what, [scriptblock]$cond, $seconds = 20) {
 }
 function Records($dir, $kind) { Get-ChildItem $dir -Filter "$kind-*.json" -ErrorAction SilentlyContinue }
 function Json($f) { Get-Content $f.FullName -Raw | ConvertFrom-Json }
+function EnvVal($rec, $name) { ($rec.env | Where-Object { $_.k -ceq $name } | Select-Object -First 1).v }
 
 # ---- 1. launcher starts the proxy and "Discord" with the proxy flag + environment -----------------------
 $env:STUB_RECORD = Join-Path $tmp 'rec1'
@@ -48,8 +49,8 @@ $d = Json (Records $env:STUB_RECORD 'discord' | Select-Object -First 1)
 if (($u.args -join ' ') -ne "--processStart Discord.exe --process-start-args $flag") { Fail "Update.exe was started with: $($u.args -join ' ')" }
 if (($d.args -join ' ') -ne $flag) { Fail "Discord.exe was started with: $($d.args -join ' ')" }
 foreach ($k in 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY') {
-    if ($u.env.$k -ne "http://127.0.0.1:$port") { Fail "$k not passed to Update.exe: '$($u.env.$k)'" }
-    if ($d.env.$k -ne "http://127.0.0.1:$port") { Fail "$k not passed to Discord.exe: '$($d.env.$k)'" }
+    if ((EnvVal $u $k) -ne "http://127.0.0.1:$port") { Fail "$k not passed to Update.exe: '$(EnvVal $u $k)'" }
+    if ((EnvVal $d $k) -ne "http://127.0.0.1:$port") { Fail "$k not passed to Discord.exe: '$(EnvVal $d $k)'" }
 }
 Write-Host "OK 1: Discord was started with $flag and the proxy environment"
 

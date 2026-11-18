@@ -7,8 +7,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/nullkzf/discord-proxy-windows/internal/proxy"
+	"github.com/nullkzf/discord-proxy/internal/proxy"
 )
 
 func touch(t *testing.T, p string) {
@@ -138,5 +139,87 @@ func TestStateRoundTripAndEnsureProxyReuse(t *testing.T) {
 	got, reused, err := ensureProxy()
 	if err != nil || !reused || got != port {
 		t.Fatalf("ensureProxy = %d reused=%v err=%v", got, reused, err)
+	}
+}
+
+func TestFindDiscordMacPrefersStableThenPTB(t *testing.T) {
+	apps := t.TempDir()
+	if _, err := findDiscordMac([]string{apps}); err != errNoDiscord {
+		t.Fatalf("want errNoDiscord, got %v", err)
+	}
+	os.MkdirAll(filepath.Join(apps, "Discord Canary.app"), 0o755)
+	if in, _ := findDiscordMac([]string{apps}); in == nil || in.Name != "Discord Canary" || in.ExeName != "Discord Canary" {
+		t.Errorf("canary-only: %+v", in)
+	}
+	os.MkdirAll(filepath.Join(apps, "Discord PTB.app"), 0o755)
+	if in, _ := findDiscordMac([]string{apps}); in.Name != "Discord PTB" {
+		t.Errorf("ptb should beat canary: %+v", in)
+	}
+	os.MkdirAll(filepath.Join(apps, "Discord.app"), 0o755)
+	in, _ := findDiscordMac([]string{apps})
+	if in.Name != "Discord" || in.Root != filepath.Join(apps, "Discord.app") || in.ExeName != "Discord" {
+		t.Errorf("stable should win: %+v", in)
+	}
+	other := t.TempDir() // an app that is a plain file, not a bundle, is ignored
+	os.WriteFile(filepath.Join(other, "Discord.app"), []byte("x"), 0o644)
+	if _, err := findDiscordMac([]string{other}); err != errNoDiscord {
+		t.Errorf("a file named Discord.app must not count: %v", err)
+	}
+}
+
+func TestLaunchCommandMacUsesOpenWithEnvAndFlag(t *testing.T) {
+	in := &install{Name: "Discord", Root: "/Applications/Discord.app", ExeName: "Discord"}
+	name, args := launchCommandMac(in, 5555)
+	if name != "/usr/bin/open" {
+		t.Errorf("name %q", name)
+	}
+	joined := strings.Join(args, " ")
+	for _, want := range []string{"--env HTTPS_PROXY=http://127.0.0.1:5555", "--env https_proxy=http://127.0.0.1:5555", "--env NO_PROXY=localhost,127.0.0.1",
+		"-a /Applications/Discord.app --args --proxy-server=http://127.0.0.1:5555"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("missing %q in: %s", want, joined)
+		}
+	}
+	// every --env must be followed by exactly one KEY=VALUE
+	for i, a := range args {
+		if a == "--env" && (i+1 >= len(args) || !strings.Contains(args[i+1], "=")) {
+			t.Errorf("--env without KEY=VALUE at %d", i)
+		}
+	}
+}
+
+func TestProcessNamesCanBeOverriddenForTests(t *testing.T) {
+	t.Setenv("DISCORDPROXY_PROCESS_NAMES", "StubDiscord,Other")
+	if got := strings.Join(processNames(), ","); got != "StubDiscord,Other" {
+		t.Errorf("got %s", got)
+	}
+}
+
+func TestOnlyOneLauncherStartsTheProxy(t *testing.T) {
+	t.Setenv("DISCORDPROXY_STATE_DIR", t.TempDir())
+	rel1, owner1 := acquireStartLock()
+	if !owner1 {
+		t.Fatal("the first launcher should own the lock")
+	}
+	rel2, owner2 := acquireStartLock()
+	if owner2 {
+		t.Fatal("a second launcher must not also start the proxy")
+	}
+	rel2()
+	rel1()
+	if _, owner := acquireStartLock(); !owner {
+		t.Error("after release the lock should be free again")
+	}
+}
+
+func TestStaleStartLockIsBroken(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DISCORDPROXY_STATE_DIR", dir)
+	lock := filepath.Join(dir, "start.lock")
+	os.WriteFile(lock, nil, 0o600)
+	old := time.Now().Add(-time.Minute)
+	os.Chtimes(lock, old, old)
+	if _, owner := acquireStartLock(); !owner {
+		t.Error("a lock left behind by a dead launcher must be taken over")
 	}
 }

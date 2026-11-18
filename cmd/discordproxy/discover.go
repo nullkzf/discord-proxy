@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -24,8 +25,15 @@ var variants = []struct{ dir, exe string }{
 	{"DiscordCanary", "DiscordCanary.exe"},
 }
 
-// processNames are the executables whose presence means "Discord is running".
+// processNames are the executables whose presence means "Discord is running". DISCORDPROXY_PROCESS_NAMES
+// (comma separated) replaces them so tests can never match, or kill, a real Discord.
 func processNames() []string {
+	if v := os.Getenv("DISCORDPROXY_PROCESS_NAMES"); v != "" {
+		return strings.Split(v, ",")
+	}
+	if runtime.GOOS == "darwin" {
+		return macProcessNames
+	}
 	names := make([]string, 0, len(variants))
 	for _, v := range variants {
 		names = append(names, v.exe)
@@ -33,7 +41,7 @@ func processNames() []string {
 	return names
 }
 
-var errNoDiscord = errors.New("Discord is not installed for this Windows user")
+var errNoDiscord = errors.New("Discord is not installed")
 
 // findDiscord returns the first Discord variant installed under localAppData (stable, then PTB, then Canary).
 func findDiscord(localAppData string) (*install, error) {
@@ -112,13 +120,18 @@ func cmpVersion(a, b []int) int {
 func launchCommand(in *install, port int) (name string, args []string, env []string) {
 	proxyURL := fmt.Sprintf("http://127.0.0.1:%d", port)
 	flag := "--proxy-server=" + proxyURL
-	env = []string{
-		"HTTP_PROXY=" + proxyURL, "HTTPS_PROXY=" + proxyURL, "ALL_PROXY=" + proxyURL,
-		"http_proxy=" + proxyURL, "https_proxy=" + proxyURL, "all_proxy=" + proxyURL,
-		"NO_PROXY=localhost,127.0.0.1", "no_proxy=localhost,127.0.0.1",
-	}
+	env = proxyEnv(proxyURL)
 	if in.Update != "" {
 		return in.Update, []string{"--processStart", in.ExeName, "--process-start-args", flag}, env
 	}
 	return in.Exe, []string{flag}, env
+}
+
+// proxyEnv is the set of proxy environment variables handed to Discord (for its non-Chromium updater).
+func proxyEnv(proxyURL string) []string {
+	return []string{
+		"HTTP_PROXY=" + proxyURL, "HTTPS_PROXY=" + proxyURL, "ALL_PROXY=" + proxyURL,
+		"http_proxy=" + proxyURL, "https_proxy=" + proxyURL, "all_proxy=" + proxyURL,
+		"NO_PROXY=localhost,127.0.0.1", "no_proxy=localhost,127.0.0.1",
+	}
 }

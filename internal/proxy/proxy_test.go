@@ -402,3 +402,52 @@ func TestResolverReturnsNilWhenEveryEndpointFails(t *testing.T) {
 		t.Errorf("want nil, got %v", ips)
 	}
 }
+
+func TestResolverSharesOneQueryAmongConcurrentLookups(t *testing.T) {
+	var hits int32
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		time.Sleep(300 * time.Millisecond)
+		fmt.Fprint(w, `{"Status":0,"Answer":[{"type":1,"data":"162.159.137.232"}]}`)
+	}))
+	defer slow.Close()
+	r := NewResolver([]string{slow.URL})
+	var wg sync.WaitGroup
+	results := make([][]string, 12)
+	for i := range results {
+		wg.Add(1)
+		go func(i int) { defer wg.Done(); results[i] = r.Lookup(context.Background(), "gateway.discord.gg") }(i)
+	}
+	wg.Wait()
+	for i, got := range results {
+		if len(got) != 1 || got[0] != "162.159.137.232" {
+			t.Errorf("lookup %d got %v", i, got)
+		}
+	}
+	if h := atomic.LoadInt32(&hits); h != 1 {
+		t.Errorf("12 concurrent lookups caused %d upstream queries, want 1", h)
+	}
+}
+
+func TestCancelledLookupIsNotCachedAsMissing(t *testing.T) {
+	gate := make(chan struct{})
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-gate:
+		case <-r.Context().Done():
+			return
+		}
+		fmt.Fprint(w, `{"Status":0,"Answer":[{"type":1,"data":"162.159.137.232"}]}`)
+	}))
+	defer slow.Close()
+	r := NewResolver([]string{slow.URL})
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if ips := r.Lookup(ctx, "late.example"); ips != nil {
+		t.Fatalf("expected nothing, got %v", ips)
+	}
+	close(gate) // now the server answers; the earlier cancellation must not have poisoned the cache
+	if ips := r.Lookup(context.Background(), "late.example"); len(ips) != 1 {
+		t.Errorf("a cancelled lookup was cached as 'no answer': %v", ips)
+	}
+}

@@ -1,4 +1,4 @@
-module github.com/nullkzf/discord-proxy-windows
+module github.com/nullkzf/discord-proxy
 
 go 1.22
 

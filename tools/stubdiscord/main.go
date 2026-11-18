@@ -23,9 +23,10 @@ func record(kind string) {
 		return
 	}
 	_ = os.MkdirAll(dir, 0o755)
-	env := map[string]string{}
+	// a list, not an object: PowerShell's JSON parser rejects keys that differ only by case (ALL_PROXY / all_proxy)
+	var env []map[string]string
 	for _, k := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NO_PROXY", "no_proxy"} {
-		env[k] = os.Getenv(k)
+		env = append(env, map[string]string{"k": k, "v": os.Getenv(k)})
 	}
 	b, _ := json.MarshalIndent(map[string]any{"kind": kind, "args": os.Args[1:], "env": env, "pid": os.Getpid()}, "", "  ")
 	_ = os.WriteFile(filepath.Join(dir, fmt.Sprintf("%s-%d.json", kind, os.Getpid())), b, 0o644)

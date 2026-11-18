@@ -15,12 +15,13 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/nullkzf/discord-proxy-windows/internal/proxy"
+	"github.com/nullkzf/discord-proxy/internal/proxy"
 )
 
 var version = "dev"
@@ -63,6 +64,10 @@ func localAppData() string {
 func stateDir() string {
 	if v := os.Getenv("DISCORDPROXY_STATE_DIR"); v != "" {
 		return v
+	}
+	if runtime.GOOS == "darwin" {
+		d, _ := os.UserConfigDir() // ~/Library/Application Support
+		return filepath.Join(d, "DiscordProxy")
 	}
 	return filepath.Join(localAppData(), "DiscordProxy")
 }
@@ -202,22 +207,49 @@ func runServe() int {
 	}
 }
 
-// ensureProxy makes sure a proxy is serving and returns its port; reused is true if one was already running.
+// acquireStartLock lets exactly one launcher start the proxy when several are opened at once (a double click).
+func acquireStartLock() (release func(), owner bool) {
+	_ = os.MkdirAll(stateDir(), 0o700)
+	p := filepath.Join(stateDir(), "start.lock")
+	for i := 0; i < 2; i++ {
+		f, err := os.OpenFile(p, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			f.Close()
+			return func() { _ = os.Remove(p) }, true
+		}
+		if st, e := os.Stat(p); e == nil && time.Since(st.ModTime()) > 15*time.Second {
+			_ = os.Remove(p) // left behind by a launcher that died
+			continue
+		}
+		break
+	}
+	return func() {}, false
+}
+
+// ensureProxy makes sure a proxy is serving and returns its port; reused is true if one was already running
+// (or another launcher is starting it right now).
 func ensureProxy() (port int, reused bool, err error) {
 	if st, ok := readState(); ok && probe(st.Port) {
 		return st.Port, true, nil
 	}
-	self, err := os.Executable()
-	if err != nil {
-		return 0, false, err
+	release, owner := acquireStartLock()
+	defer release()
+	if owner {
+		if st, ok := readState(); ok && probe(st.Port) { // someone finished while we took the lock
+			return st.Port, true, nil
+		}
+		self, err := os.Executable()
+		if err != nil {
+			return 0, false, err
+		}
+		if err := spawnDetached(self, "--serve"); err != nil {
+			return 0, false, fmt.Errorf("could not start the background proxy: %w", err)
+		}
 	}
-	if err := spawnDetached(self, "--serve"); err != nil {
-		return 0, false, fmt.Errorf("could not start the background proxy: %w", err)
-	}
-	deadline := time.Now().Add(8 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if st, ok := readState(); ok && probe(st.Port) {
-			return st.Port, false, nil
+			return st.Port, !owner, nil
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -230,9 +262,9 @@ func runLauncher() int {
 	logf, closer := openLog()
 	defer closer.Close()
 
-	in, err := findDiscord(localAppData())
+	in, err := discoverInstall()
 	if err != nil {
-		notify("Discord isn't installed for this Windows user.\n\nInstall Discord from discord.com first, then open Discord Proxy again.")
+		notify("Discord isn't installed.\n\nInstall Discord from discord.com first, then open Discord Proxy again.")
 		return 1
 	}
 	port, reused, err := ensureProxy()
@@ -250,7 +282,7 @@ func runLauncher() int {
 			time.Sleep(200 * time.Millisecond)
 		}
 	}
-	name, args, env := launchCommand(in, port)
+	name, args, env := buildLaunch(in, port)
 	cmd := exec.Command(name, args...)
 	cmd.Env = append(os.Environ(), env...)
 	hideWindow(cmd)
